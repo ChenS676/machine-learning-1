@@ -31,13 +31,11 @@ def rbf_features(x: np.ndarray, means: np.ndarray, sigma:float) -> np.ndarray:
         means = means.reshape((-1, 1))
 
     (N, D), (K, _) = x.shape, means.shape
-    # TODO Implement the normalized rbf features
+
     features = np.zeros((N, K+1))
-    for i in range(K):
-        features[:, i] = np.exp(-(np.linalg.norm(x - means[i], 2, axis=1)**2) / 2 *sigma) /x[:, 0]
-    # for j in range(K):
-    #     for i in range(N):
-    #         features[i, j] = np.exp(-np.linalg.norm(x[i] - means[j], 2)/2*sigma)/x[i]
+    features[:, :-1] = np.exp(np.divide(-(np.linalg.norm(np.subtract(x[..., None], means), 2, axis=2)**2), 2 *sigma**2))
+    z = np.ones((K, 1)) @ np.sum(features, axis=1)[:, None].T
+    features[:, :-1] = np.divide(features[:, :-1], z.T)
     features[:, -1] = np.ones(N)
     return features
 
@@ -126,4 +124,118 @@ example_funcs = np.zeros((weights.shape[0], y_plot.shape[0]))
 for i in range(weights.shape[0]):
     example_funcs[i] = pred_lin_regr(weights[i, :], rbf_features(x_plot, features_means, sigma=feat_sigma))
     plt.plot(x_plot, example_funcs[i], 'red', alpha=0.4)
-    plt.show()
+plt.show()
+
+sigma_kern = 1
+inv_lamb = 1000
+
+
+def get_kernel_vec(x_prime: np.ndarray, x: np.ndarray, sigma: float) -> np.ndarray:
+    """
+    :param x_prime: input data (shape: [N_2 x d])
+    :param x: input data (shape: [N_1, d])
+    :param sigma: bandwidth of the kernel
+    :return: return kernel vector
+            (shape: [N_2 x N_1])
+    """
+    if len(x_prime.shape) == 1:
+        x_prime = x_prime.reshape((-1, 1))
+
+    if len(x.shape) == 1:
+        x = x.reshape((-1, 1))
+    ############################################################
+    N2, d = x_prime.shape
+    N1, d = x.shape
+    func = lambda x1, x2: np.exp(np.divide(- np.linalg.norm(x1-x2, 2)**2 , 2*sigma))
+    kernel = np.zeros((N2, N1))
+    for j in range(N1):
+        for i in range(N2):
+            kernel[i, j] = func(x_prime[i], x[j])
+    ############################################################
+    return kernel
+
+
+def get_kernel_mat(X: np.ndarray, sigma: float) -> np.ndarray:
+    """
+    :param X: training data matrix (N_train, d)
+    :sigma: bandwidth of the kernel(scalar)
+    :return: the kernel matrix (N_train x N_train)
+    """
+    return get_kernel_vec(X, X, sigma)
+
+
+
+def predictive_distr_gp(x: np.ndarray, Y: np.ndarray, X: np.ndarray, sigma_kern:float, inv_lamb:float):
+    """"
+    :param x: input data (shape: [N_input, d])
+    :param Y: output training data (shape: [N_train, 1])
+    :param X: input training data (shape: [N_train, d])
+    :param sigma_kern: bandwidth of the kernel (scalar)
+    :param inv_lamb: inverse of lambda (scalar)
+    :return : returns the mean (shape: [N_input x 1])
+                      the variance (shape: [N_input])
+                      of the predictive distribution
+    """
+    ############################################################
+    # TODO Implement the predictive distribution for GPs
+    N_input, d = x.shape
+    N_train, _ = Y.shape
+    K = get_kernel_mat(X, sigma_kern)
+    pred_mean = np.zeros((N_input, 1))
+    pred_var = np.zeros((N_input))
+    for i in range(N_input):
+        k_bar_vector = get_kernel_vec(X, x[i], sigma_kern)
+        k_bar = get_kernel_vec(x[i, :], x[i, :], sigma_kern)
+
+        pred_mean[i] = inv_lamb * k_bar_vector.T @ np.linalg.pinv(K * inv_lamb + sigma_y*np.ones((K.shape))) @ Y
+        pred_var[i] = sigma_y + inv_lamb * k_bar - inv_lamb**2 * k_bar_vector.T @ np.linalg.pinv(sigma_y*np.ones((K.shape)) + K) @ k_bar_vector
+
+            # pred_mean[i] = inv_lamb * k_bar_vector.T @ np.linalg.solve(K * inv_lamb + sigma_y*np.ones((K.shape)), np.eye(K.shape[0])) @ Y
+            # pred_var[i] =  sigma_y + inv_lamb * k_bar - inv_lamb**2 * k_bar_vector.T @ np.linalg.solve(sigma_y*np.ones((K.shape)) + K, np.eye(K.shape[0])) @ k_bar_vector
+    ############################################################
+    return pred_mean, pred_var
+
+
+sigma_kern = 1                   # standard deviation of function noise (given)
+inv_lamb = 1000             # inverse lambda value -> equivalent to lambda = 1e-3
+gp_fig = plt.figure()
+
+# Let's go through the training data and add on training point to the system in each iteration and let's plot
+# everything dynamically
+x_dyn_train = []
+y_dyn_train = []
+for i in range(x_train.shape[0]):
+    x_dyn_train.append(x_train[i])
+    y_dyn_train.append(y_train[i])
+    mean, var = predictive_distr_gp(x_plot, np.array(y_dyn_train), np.array(x_dyn_train), sigma_kern, inv_lamb)
+    if i == i:
+        plt.figure(gp_fig.number)
+        gp_fig.clf()
+        plt.plot(x_plot[:, 0], mean[:, 0])
+        plt.fill_between(x_plot[:, 0], mean[:, 0] -2*np.sqrt(var), mean[:,0]+2*np.sqrt(var),
+                         alpha=0.2, edgecolor='r', facecolor='r')
+        plt.plot(np.array(x_dyn_train), np.array(y_dyn_train), 'rx')
+        plt.title('i='+ str(i))
+        plt.show()
+    elif i == x_train.shape[0]-1:
+        plt.figure(gp_fig.number)
+        gp_fig.clf()
+        plt.plot(x_plot[:, 0], mean[:, 0])
+        plt.fill_between(x_plot[:, 0], mean[:, 0] -2*np.sqrt(var), mean[:,0]+2*np.sqrt(var),
+                         alpha=0.2, edgecolor='r', facecolor='r')
+        plt.plot(np.array(x_dyn_train), np.array(y_dyn_train), 'rx')
+        plt.title('i='+ str(i))
+        plt.pause(0.5)
+        plt.show()
+# now let's see the function approximation with all training data and compare to the ground truth function
+mean, var = predictive_distr_gp(x_plot, y_train, x_train, sigma_kern, inv_lamb)
+
+plt.figure()
+plt.plot(x_plot[:, 0], mean[:, 0])
+plt.fill_between(x_plot[:, 0], mean[:, 0] -2*np.sqrt(var), mean[:,0]+2*np.sqrt(var),
+                 alpha=0.2, edgecolor='r', facecolor='r')
+plt.plot(np.array(x_train), np.array(y_train), 'rx')
+plt.plot(x_plot, y_plot, 'g')
+
+plt.legend(['mean prediction',  'training points', 'gt-function', '2 $\sigma$',])
+
